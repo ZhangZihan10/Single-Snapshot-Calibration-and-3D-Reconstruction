@@ -1,0 +1,98 @@
+%% 虚拟 单张校准相机，激光面，定位
+%% unity文件ComputerVision6
+clc
+clear all
+
+global ocam_model;
+global Cent;
+global Cent1;
+global cam_pitch_opt;
+global cam_roll_opt;
+global cam_yaw_opt;
+global las_pitch_opt;
+global las_roll_opt;
+global Cube_width;
+
+tic; % 开始计时
+
+%load('Omni_Calib_Results_Real.mat');
+load('Omni_Calib_Results_Sim3.mat'); % Calib parameters
+ocam_model = calib_data.ocam_model; % Calib parameters
+
+%图像增强
+%img=imread('image9_3.jpg'); % read image
+%up_scale=3;
+%im_h = SRCNN_single_image(img, up_scale);
+% 保存增强结果
+%enhanced_name = 'image9_3E.jpg';
+%imwrite(im_h, enhanced_name);
+
+i = calib_data.n_ima;
+calib_data.L(i+1)={'image9_3.jpg'};
+%calib_data.L{i+1} = enhanced_name;
+
+use_corner_find=1;
+% 已有 calib_data（包含 ocam_model, n_sq_x, n_sq_y），并把新图像路径放进 L{1}
+I1_ = imread('image9_3.jpg'); % read image
+
+squareSize = 0.116;
+%squareSize = 0.026;           % 单位米
+%[C_B, R_WC, T_BC, info] = pose_from_board_no_rotation5(calib_data, i+1, squareSize, true);
+
+opts = struct('angThreshDeg',0.5,'maxTrials',3000,'confidence',0.999,'refine','fisheye','verbose',true, 'pixThreshPx', 4.0);
+[C_B, R_CW, T_BC, dbg, roll_deg, pitch_deg, yaw_deg] = pose_from_board_no_rotation7_3(calib_data, i+1, squareSize, true, opts);
+%[C_B, R_WC, T_BC, dbg] = pose_from_board_no_rotation2(calib_data, i+1, squareSize, true);
+
+disp('相机在棋盘(=世界)坐标系的位置 C_B ='); disp(C_B);
+disp('姿态 R_CW ='); disp(R_CW);%world → camera 的旋转矩阵
+
+
+% for las
+cam_pitch_opt=roll_deg;
+cam_roll_opt=pitch_deg;
+     cam_yaw_opt=180-yaw_deg;
+%cam_yaw_opt=180+yaw_deg;
+    %cam_yaw_opt=-yaw_deg;
+%cam_pitch_opt=-5;cam_roll_opt=3;cam_yaw_opt=4;
+
+Guess = 1;
+options = optimoptions('fmincon','Display','iter','Algorithm','sqp');
+Cent = []; 
+Cent1 = []; 
+I_ = las_segm(I1_,-80);
+[xx_,zz_,idx]=blue_blobs(I_,I1_);
+% check whether number of blobs correct or not
+if (idx ~= 8)
+    clear;
+end
+% fitting laser points for each side of the target
+img1 = las_segm(I1_,108); %imshow(img1)
+img1 = bwmorph(img1,'skel',Inf);
+%img1=LaserFind2(I1_);
+
+[Cent, Cent1]=intersect_blobs(img1,zz_,xx_); % Cent1,2-h, Cent2,3-v
+% laser plane calibration
+las_pitch_opt = fmincon(@objective_pitch_las,Guess,[],[],[],[],-30,30,...
+    @constraint,options);
+las_roll_opt = fmincon(@objective_roll_las,Guess,[],[],[],[],-30,30,...
+    @constraint,options);
+%%
+%Cube_width = 1292.5;
+Cube_width = 1312.48;
+las_dist_opt = fmincon(@objective_dist_las,Guess,[],[],[],[],[],[],...
+    @constraint,options);
+
+elapsed_time = toc; % 结束计时并获取运行时间
+disp(['代码运行时间为：', num2str(elapsed_time), ' 秒']); % 显示运行时间
+
+%% test fo paper   las_pitch_opt=2;las_roll_opt=4;
+[x,y] = mapping_points(Cent,cam_roll_opt,cam_pitch_opt,cam_yaw_opt,...
+    las_roll_opt,las_pitch_opt,las_dist_opt,ocam_model);
+[x1,y1] = mapping_points(Cent1,cam_roll_opt,cam_pitch_opt,cam_yaw_opt,...
+    las_roll_opt,las_pitch_opt,las_dist_opt,ocam_model);
+figure
+scatter(x,y,5,'b.'); % Laser intersections
+hold on  
+scatter(x1,y1,5,'b.'); % Laser intersections
+scatter(0,0,'b*'); % Robot location
+hold off

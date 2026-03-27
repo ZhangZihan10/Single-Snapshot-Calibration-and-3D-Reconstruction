@@ -1,0 +1,44 @@
+%%主程序
+clc
+clear all
+load('Omni_Calib_Results_Real2.mat');
+%load('Omni_Calib_Results_Sim.mat'); % Calib parameters
+%ocam_model = calib_data.ocam_model; % Calib parameters
+i = calib_data.n_ima;
+calib_data.L(i+1)={'d3.jpg'};
+%use_corner_find=1;
+% 已有 calib_data（包含 ocam_model, n_sq_x, n_sq_y），并把新图像路径放进 L{1}
+
+%squareSize = 0.116;
+squareSize = 0.026;           % 单位米
+%[C_B, R_WC, T_BC, info] = pose_from_board_no_rotation5(calib_data, i+1, squareSize, true);
+
+opts = struct('angThreshDeg',1.0,'maxTrials',3000,'confidence',0.999,'refine','fisheye','verbose',true);
+[C_B, R_WC, T_BC, dbg] = pose_from_board_no_rotation7_2(calib_data, i+1, squareSize, true, opts);
+%[C_B, R_WC, T_BC, dbg] = pose_from_board_no_rotation2(calib_data, i+1, squareSize, true);
+
+disp('相机在棋盘(=世界)坐标系的位置 C_B ='); disp(C_B);
+disp('姿态 R_WC ='); disp(R_WC);
+
+%% 虚拟
+clc
+clear all
+%load('Omni_Calib_Results_Real.mat');
+load('Omni_Calib_Results_Sim.mat'); % Calib parameters
+ocam_model = calib_data.ocam_model; % Calib parameters
+i = calib_data.n_ima;
+calib_data.L(i+1)={'test5.jpg'};
+use_corner_find=1;
+% 已有 calib_data（包含 ocam_model, n_sq_x, n_sq_y），并把新图像路径放进 L{1}
+
+squareSize = 0.116;
+%squareSize = 0.026;           % 单位米
+%[C_B, R_WC, T_BC, info] = pose_from_board_no_rotation5(calib_data, i+1, squareSize, true);
+
+opts = struct('angThreshDeg',1.0,'maxTrials',3000,'confidence',0.999,'refine','fisheye','verbose',true);
+[C_B, R_WC, T_BC, dbg] = pose_from_board_no_rotation7_1(calib_data, i+1, squareSize, true, opts);
+%[C_B, R_WC, T_BC, dbg] = pose_from_board_no_rotation2(calib_data, i+1, squareSize, true);
+
+disp('相机在棋盘(=世界)坐标系的位置 C_B ='); disp(C_B);
+disp('姿态 R_WC ='); disp(R_WC);
+

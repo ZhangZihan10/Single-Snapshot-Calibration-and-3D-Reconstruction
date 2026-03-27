@@ -1,0 +1,51 @@
+
+%% 传统方法，两个垂直棋盘格进行相机参数校准
+clc
+clear all
+load('Omni_Calib_Results_Sim.mat'); % Calib parameters
+%load('Omni_Calib_Results_Real2.mat'); % Calib parameters
+ocam_model = calib_data.ocam_model; % Calib parameters
+i = calib_data.n_ima;
+calib_data.L(i+1)={'TestImages/image3.jpg'};
+use_corner_find=1;
+[callBack,Xp_abs_,Yp_abs_] = ...
+    get_checkerboard_cornersUrban9(i+1,use_corner_find,calib_data);
+Xt = calib_data.Xt;
+Yt = calib_data.Yt;
+imagePoints = [Yp_abs_,Xp_abs_]; 
+% second pattern
+%[II, name] = Get2ndPattern(i,imagePoints,calib_data);
+calib_data.L(i+2)={'TestImages/image4.jpg'};
+use_corner_find=1;
+[callBack,Xp_abs_1,Yp_abs_1] = ...
+    get_checkerboard_cornersUrban9(i+2,use_corner_find,calib_data);
+imagePoints1 = [Yp_abs_1,Xp_abs_1];
+%% first image extrinsic
+if max(imagePoints(:,1)) > max(imagePoints1(:,1))
+    imagePoints0 = imagePoints;
+    imagePoints = imagePoints1;
+    imagePoints1 = imagePoints0;
+    Xp_abs_ = imagePoints(:,2);
+    Yp_abs_ = imagePoints(:,1);
+    Xp_abs_1 = imagePoints1(:,2);
+    Yp_abs_1 = imagePoints1(:,1);
+end
+[RRfin,ss]=calibrate(Xt, Yt, Xp_abs_, Yp_abs_, ocam_model); 
+RRfin_=FindTransformMatrix(Xp_abs_, Yp_abs_, Xt, Yt, ocam_model, RRfin);
+% second image extrinsic
+[RRfin1,ss]=calibrate(Xt, Yt, Xp_abs_1, Yp_abs_1, ocam_model); 
+RRfin1_=FindTransformMatrix(Xp_abs_1, Yp_abs_1, Xt, Yt, ocam_model, RRfin);
+%% obtain camera orientation and distance to patterns from camera
+[M,M1] = show_patterns(0,0,0,i,RRfin_,RRfin1_,calib_data); % 0,0,0 – means that camera is not rotated (we don’t know its rotation)
+% first pattern
+angle_y = atand(diff([M(3,9),M(3,1)])/diff([M(1,9),M(1,1)]));
+angle_z = atand(diff([M(2,9),M(2,1)])/diff([M(1,9),M(1,1)]));
+angle_x = atand(diff([M(2,46),M(2,1)])/diff([M(3,46),M(3,1)]));
+% second pattern
+angle_y1 = atand(diff([M1(1,46),M1(1,1)])/diff([M1(3,46),M1(3,1)]));
+angle_z1 = atand(diff([M1(1,9),M1(1,1)])/diff([M1(2,9),M1(2,1)]));
+angle_x1 = atand(diff([M1(3,9),M1(3,1)])/diff([M1(2,9),M1(2,1)]));
+% mean value with regards to the two patterns
+camX = sign(angle_x)*(abs(angle_x)+abs(angle_x1))/2;
+camY = sign(angle_y)*(abs(angle_y)+abs(angle_y1))/2;
+camZ = sign(angle_z)*(abs(angle_z)+abs(angle_z1))/2;
