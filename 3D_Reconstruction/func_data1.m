@@ -1,0 +1,6 @@
+function func_data1(ClientHandle, Q, b,thetha6 )
+% writeTCP(ClientHandle,sprintf("ModRobot:%f,%f,%f,%f",Q(b,1),Q(b,2)*180/pi,Q(b,3)*180/pi,(Q(b,4)-pi/4)*180/pi));
+t=(Q(b,3)+Q(b,2))*180/pi+thetha6;%末端角度调整
+writeTCP(ClientHandle,sprintf("ModRobot:%f,%f,%f,%f,d%",(Q(b,1)*0.746-0.00047),Q(b,2)*180/pi,Q(b,3)*180/pi,t));%默认是45度%(Q(b,3)+Q(b,2))*180/pi));%Q(b,4)*180/pi));%
+%Q(b,1)经过改造，原为其本身
+pause(0.054);%(Q(b,4)+9*pi/32)*180/pi

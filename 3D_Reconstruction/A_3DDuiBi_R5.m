@@ -1,0 +1,241 @@
+%% 虚拟三维重构评价系统 (基于多障碍板真值) 计算每个障碍板  相机有旋转 障碍板有角度 1500
+
+
+clear; clc; close all;
+
+%% 1. 参数设置：四个障碍板角点精确坐标 (单位: 米)
+% 保留用户提供的原始角点数据，不作任何修改
+% 障碍板 1
+
+% 障碍板 3
+obs2_corners = [
+    -0.2, 2.1,  0.9;  
+     0.4, 2.1,  0.9;
+     0.4, 2.55,  0.9;
+     -0.2, 2.55,  0.9  
+     ];
+% 障碍板 4
+obs1_corners = [ 
+     -0.2, 2.1,  0; 
+     0.4,  2.1, 0;
+     0.4,  2.1, 0.9;  
+     -0.2, 2.1,  0.9 
+     ];
+
+% 将所有障碍板放入一个集合
+all_obstacles = {obs1_corners, obs2_corners};
+% 为方便输出对应名称，按 all_obstacles 里的顺序定义名称
+obstacle_names = {'obs1_corners (右)', 'obs2_corners (后)', 'obs3_corners (前)', 'obs4_corners (左)'};
+
+%% 2. 构建多目标真值模型 (Multi-Object GT Generation) 与标签追踪
+sampling_res = 0.02; % 5cm 采样精度
+ptCloud_GT_locs = [];
+labels_GT = [];
+
+for i = 1:length(all_obstacles)
+    corners = all_obstacles{i};
+    if isempty(corners), continue; end
+    
+    % 计算该面板的局部向量
+    v1 = corners(2,:) - corners(1,:);
+    v2 = corners(4,:) - corners(1,:);
+    
+    % 在面板表面均匀采样
+    [d1, d2] = meshgrid(0:sampling_res:1, 0:sampling_res:1);
+    grid_points = corners(1,:) + d1(:)*v1 + d2(:)*v2;
+    
+    % 记录三维点位置
+    ptCloud_GT_locs = [ptCloud_GT_locs; grid_points];
+    % 记录这些点对应的障碍板序号，用于后续分离重构点云
+    labels_GT = [labels_GT; repmat(i, size(grid_points, 1), 1)];
+end
+
+% 直接基于坐标数组创建包含所有障碍板的整体真值点云
+%ptCloud_GT = pointCloud(ptCloud_GT_locs);
+
+% 为所有点生成绿色 RGB 数据 [R, G, B]
+% [0, 1, 0] 代表纯绿色，我们将其复制到每一个点
+numPoints = size(ptCloud_GT_locs, 1);
+greenColors = repmat([0, 1, 0], numPoints, 1);
+% 创建带有颜色信息的点云对象
+ptCloud_GT = pointCloud(ptCloud_GT_locs, 'Color', greenColors);
+
+% 开启绘图窗口
+figure('Name', '三维重构真值点云预览', 'Color', [1 1 1]);
+pcshow(ptCloud_GT, 'MarkerSize', 20); % 绘制点云，MarkerSize 控制点的大小
+
+% 图表美化
+title('多障碍板真值模型 (Ground Truth)', 'FontSize', 14);
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+grid on;
+axis equal; % 保持比例一致，防止变形
+view(3);    % 设置为标准 3D 视角
+
+% (可选) 为每个障碍板添加文字标注
+%hold on;
+%for i = 1:length(all_obstacles)
+%    center_pos = mean(all_obstacles{i}); % 计算中心位置放置标签
+%    text(center_pos(1), center_pos(2), center_pos(3)+0.2, ...
+%        obstacle_names{i}, 'FontSize', 10, 'FontWeight', 'bold', 'Color', 'k');
+%end
+%hold off;
+%% 3. 自动导入、识别并生成【3D 密集云图】
+fig_file = 'test5_O.fig'; 
+if ~exist(fig_file, 'file')
+    error('未找到文件 %s', fig_file);
+end
+temp_fig = openfig(fig_file, 'invisible');
+
+% 寻找所有图形对象
+target_objs = findobj(temp_fig, 'Type', 'surface');
+if isempty(target_objs), target_objs = findobj(temp_fig, 'Type', 'scatter'); end
+
+% --- 在进入循环提取前，必须先初始化变量 ---
+X_final = []; 
+Y_final = []; 
+Z_final = [];
+grid_res = 0.02; % 采样间距 5cm
+
+% 3. 遍历识别到的对象并基于角点构建任意角度平面
+if ~isempty(target_objs)
+    for k = 1:length(target_objs)
+        % 提取原始角点数据并缩放
+        x_raw = get(target_objs(k), 'XData') / 100;
+        y_raw = get(target_objs(k), 'YData') / 100;
+        z_raw = get(target_objs(k), 'ZData') / 100;
+        
+        % 将 2x2 或 1x4 的角点矩阵转换为 N x 3 的点列表
+        pts = [x_raw(:), y_raw(:), z_raw(:)];
+        
+        % 只有当点数足以构成面（通常为 4 个角点）时进行面构建
+        if size(pts, 1) >= 4
+            % 假设角点顺序为：1:左上, 2:左下, 3:右上, 4:右下
+            % 定义两个相邻的边缘向量（基向量）
+            v_vertical   = pts(2,:) - pts(1,:); % 垂直边 (1 -> 2)
+            v_horizontal = pts(3,:) - pts(1,:); % 水平边 (1 -> 3)
+            
+            % 计算面板的物理尺寸以确定采样点数
+            len_v = norm(v_vertical);
+            len_h = norm(v_horizontal);
+            
+            % 生成参数化坐标网格 [0, 1]
+            [s, t] = meshgrid(0:(grid_res/len_h):1, 0:(grid_res/len_v):1);
+            
+            % 使用双线性合成生成平面上的所有点
+            % 公式：P(s,t) = P1 + s*v_horizontal + t*v_vertical
+            X_grid = pts(1,1) + s*v_horizontal(1) + t*v_vertical(1);
+            Y_grid = pts(1,2) + s*v_horizontal(2) + t*v_vertical(2);
+            Z_grid = pts(1,3) + s*v_horizontal(3) + t*v_vertical(3);
+            
+            X_final = [X_final; X_grid(:)];
+            Y_final = [Y_final; Y_grid(:)];
+            Z_final = [Z_final; Z_grid(:)];
+        else
+            % 如果点数不足（如离群点），直接拼接
+            X_final = [X_final; x_raw(:)];
+            Y_final = [Y_final; y_raw(:)];
+            Z_final = [Z_final; z_raw(:)];
+        end
+    end
+else
+    close(temp_fig); 
+    error('未找到 3D 数据，请检查 .fig 文件内容。');
+end
+close(temp_fig);
+
+% --- 此时运行到第 119 行，变量已存在 ---
+valid = ~isnan(X_final) & ~isnan(Y_final) & ~isnan(Z_final);
+ptCloud_Recon = pointCloud([X_final(valid), Y_final(valid), Z_final(valid)]);
+
+% 绘制点云图
+figure('Color', 'w', 'Name', '3D 重构云图展示');
+pcshow(ptCloud_Recon, 'MarkerSize', 15);
+colormap(jet); 
+cb = colorbar;
+ylabel(cb, '高度/Z轴位置 (m)');
+title('重构出的障碍板 3D 密集云图 (任意角度平面生成)');
+view(3); axis equal; grid on;
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+
+%% 4. 坐标系自动对齐 (Registration) 
+fprintf('正在执行 ICP 坐标对齐...\n');
+[tform, ptCloud_Recon_Aligned] = pcregistericp(ptCloud_Recon, ptCloud_GT);
+
+%% 5. 定量指标计算与分块统计 (Quantitative Metrics)
+% 使用最近邻搜索计算欧式距离误差，并寻找最近的 GT 点
+[idx_closest, dists] = knnsearch(ptCloud_GT_locs, ptCloud_Recon_Aligned.Location);
+
+% === 计算全局误差 ===
+MAE_total   = mean(dists);            
+RMSE_total  = sqrt(mean(dists.^2));   
+MedAE_total = median(dists);          
+
+fprintf('\n--- 基于 RESDEPTH 公式总体计算结果 ---\n');
+fprintf('总体 MAE:   %.4f m (%.2f mm)\n', MAE_total, MAE_total * 1000);
+fprintf('总体 RMSE:  %.4f m (%.2f mm)\n', RMSE_total, RMSE_total * 1000);
+fprintf('总体 MedAE: %.4f m\n', MedAE_total);
+
+% === 利用标签，识别每个重构点属于哪个具体的障碍板 ===
+recon_labels = labels_GT(idx_closest);
+color_map = lines(length(all_obstacles));
+recon_colors = zeros(size(ptCloud_Recon_Aligned.Location, 1), 3);
+
+fprintf('\n--- 各个障碍板独立计算结果 ---\n');
+for i = 1:length(all_obstacles)
+    if isempty(all_obstacles{i}), continue; end
+    
+    % 筛选出被划分为该障碍板的所有重构点的距离和索引
+    idx_i = (recon_labels == i);
+    dists_i = dists(idx_i);
+    
+    if isempty(dists_i)
+        fprintf('%s: 未匹配到相关的重构点。\n', obstacle_names{i});
+        continue;
+    end
+    
+    % 分别计算 MAE, RMSE, MedAE
+    MAE_i   = mean(dists_i);
+    RMSE_i  = sqrt(mean(dists_i.^2));
+    MedAE_i = median(dists_i);
+    
+    fprintf('%s (匹配点数: %d):\n', obstacle_names{i}, sum(idx_i));
+    fprintf('  MAE:   %.4f m (%.2f mm)\n', MAE_i, MAE_i * 1000);
+    fprintf('  RMSE:  %.4f m (%.2f mm)\n', RMSE_i, RMSE_i * 1000);
+    fprintf('  MedAE: %.4f m\n\n', MedAE_i);
+    
+    % 为归属该障碍板的重构点分配固定颜色
+    recon_colors(idx_i, :) = repmat(color_map(i, :), sum(idx_i), 1);
+end
+
+%% 6. 结果可视化报告 (多色区分显示)
+figure('Color', 'w', 'Name', '3D 重建精度对比可视化 (分类着色)');
+% --- 1. 绘制真值模型 (设置为绿色 [0 1 0]) ---
+pcshow(ptCloud_GT.Location, [0 1 0], 'VerticalAxis', 'Z', 'VerticalAxisDir', 'Down', 'MarkerSize', 8); 
+hold on;
+
+% --- 2. 绘制对齐后的重构模型 (按障碍板归属赋予不同颜色) ---
+ptCloud_ColoredRecon = pointCloud(ptCloud_Recon_Aligned.Location, 'Color', uint8(recon_colors * 255));
+pcshow(ptCloud_ColoredRecon, 'MarkerSize', 15);
+
+% --- 3. 图形修饰与动态图例 ---
+title(['3D 重建 vs 真值模型 (总体 MAE: ', num2str(MAE_total*1000, '%.2f'), ' mm)'], 'FontSize', 12);
+
+% 构建动态图例
+h_gt = scatter3(NaN, NaN, NaN, 50, [0 1 0], 'filled'); 
+legend_handles = h_gt;
+legend_labels = {'真值模型 (GT 参考 - Green)'};
+
+for i = 1:length(all_obstacles)
+    if any(recon_labels == i)
+        h_tmp = scatter3(NaN, NaN, NaN, 50, color_map(i,:), 'filled');
+        legend_handles = [legend_handles, h_tmp];
+        legend_labels{end+1} = [obstacle_names{i} ' 重构点'];
+    end
+end
+
+legend(legend_handles, legend_labels, 'TextColor', 'black', 'Location', 'northeast');
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+view(3);              
+axis equal;           
+grid on;              
+set(gca, 'Color', [0.1 0.1 0.1]);

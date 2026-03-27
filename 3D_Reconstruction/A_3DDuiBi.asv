@@ -1,0 +1,167 @@
+%% 三维重构评价系统 (基于多障碍板真值)
+clear; clc; close all;
+
+%% 1. 参数设置：四个障碍板角点精确坐标 (单位: 米)
+% 保留用户提供的原始角点数据，不作任何修改
+
+% 障碍板 1
+obs1_corners = [
+     
+    -2.66, 2.82,  0; 
+    0.59,  2.82,  0;
+     0.59,  2.82,  3.05;  
+     -2.66, 2.82,  3.05
+     ];
+
+% 障碍板 2
+obs2_corners = [ 
+      
+     -3.13, -3.7,   0;  
+    -3.13, -0.41,  0;
+    -3.13, -0.41,  3.1;  
+    -3.13, -3.7,   3.1
+   ]; 
+
+% 障碍板 3
+obs3_corners = [
+      
+    -2.6, -5.03,  0;  
+     0.63, -5.03,  0
+     0.63, -5.03,  3.04;
+     -2.6, -5.03,  3.04  
+     ];
+
+% 障碍板 4
+obs4_corners = [ 
+      
+     2.32, -1.4,  0; 
+     2.32,  0.53, 0;
+     2.32,  0.53, 2.7;  
+     2.32, -1.4,  2.7 
+     
+     ];
+
+% 将所有障碍板放入一个集合
+all_obstacles = {obs1_corners, obs2_corners, obs3_corners, obs4_corners};
+
+%% 2. 构建多目标真值模型 (Multi-Object GT Generation)
+sampling_res = 0.01; % 1cm 采样精度
+ptCloud_GT = pointCloud(zeros(0,3)); % 统一变量名为 ptCloud_GT
+
+for i = 1:length(all_obstacles)
+    corners = all_obstacles{i};
+    if isempty(corners), continue; end
+    
+    % 计算该面板的局部向量
+    v1 = corners(2,:) - corners(1,:);
+    v2 = corners(4,:) - corners(1,:);
+    
+    % 在面板表面均匀采样
+    [d1, d2] = meshgrid(0:sampling_res:1, 0:sampling_res:1);
+    grid_points = corners(1,:) + d1(:)*v1 + d2(:)*v2;
+    
+    % 合并到总真值模型
+    ptCloud_GT = pcmerge(ptCloud_GT, pointCloud(grid_points), 0.001);
+end
+
+%% 3. 自动导入、识别并综合绘制云图 (支持多障碍板)
+
+%% 3. 自动导入、识别并生成完整障碍板云图
+fig_file = 'image1_test.fig'; 
+if ~exist(fig_file, 'file')
+    error('未找到文件 %s，请确保文件在当前目录下。', fig_file);
+end
+
+% 1. 在后台打开 fig 文件
+temp_fig = openfig(fig_file, 'invisible');
+
+% 2. 自动搜索图形对象句柄
+target_objs = findobj(temp_fig, 'Type', 'surface');
+if isempty(target_objs), target_objs = findobj(temp_fig, 'Type', 'scatter'); end
+if isempty(target_objs), target_objs = findobj(temp_fig, 'Type', 'line'); end
+
+% 3. 遍历对象并进行密集点云生成 [cite: 212]
+if ~isempty(target_objs)
+    recon_data_all = [];
+    % 设定云图生成的分辨率 (例如每1cm一个点)
+    grid_res = 0.01; 
+
+    for k = 1:length(target_objs)
+        % 提取当前对象的角点数据
+        x_raw = get(target_objs(k), 'XData') / 1000;
+        y_raw = get(target_objs(k), 'YData') / 1000;
+        z_raw = get(target_objs(k), 'ZData') / 1000;
+        
+        % 如果提取到的是 4 个角点，则进行插值填充生成完整面板 [cite: 195, 287]
+        if numel(z_raw) <= 8  % 判定为角点模式
+            % 确定边界
+            x_min = min(x_raw(:)); x_max = max(x_raw(:));
+            y_min = min(y_raw(:)); y_max = max(y_raw(:));
+            z_val = mean(z_raw(:)); % 假设面板垂直于相机
+            
+            % 创建密集网格 [cite: 185, 186]
+            [X_grid, Y_grid] = meshgrid(x_min:grid_res:x_max, y_min:grid_res:y_max);
+            Z_grid = ones(size(X_grid)) * z_val;
+            
+            recon_data_all = [recon_data_all; X_grid(:), Y_grid(:), Z_grid(:)];
+        else
+            % 如果本来就是密集点云，则直接拼接 
+            recon_data_all = [recon_data_all; x_raw(:), y_raw(:), z_raw(:)];
+        end
+    end
+    fprintf('成功识别 %d 个对象并生成完整云图！总点数: %d\n', length(target_objs), size(recon_data_all, 1));
+else
+    close(temp_fig);
+    error('自动识别失败。');
+end
+close(temp_fig); 
+
+% 4. 预处理：过滤 NaN [cite: 354]
+valid_mask = ~any(isnan(recon_data_all), 2);
+recon_data = recon_data_all(valid_mask, :);
+ptCloud_Recon = pointCloud(recon_data);
+
+% 5. 初始去噪 (Post-processing) [cite: 287]
+ptCloud_Recon = pcdenoise(ptCloud_Recon, 'NumNeighbors', 10, 'Threshold', 1.0);
+
+% 6. 绘制重构后的完整障碍板云图 [cite: 445]
+figure('Color', 'w', 'Name', '完整障碍板重构云图');
+pcshow(ptCloud_Recon, 'MarkerSize', 8); 
+colormap(parula); % 冷色代表远，暖色代表近 [cite: 445]
+cb = colorbar;
+ylabel(cb, '深度距离 (m)');
+title('重构数据：从角点生成的完整障碍板点云');
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+view(3); grid on; axis tight;
+%% 4. 坐标系自动对齐 (Registration) 
+% 由于手动测量坐标系与相机坐标系通常不重合，执行 ICP 精细对齐
+fprintf('正在执行 ICP 坐标对齐...\n');
+[tform, ptCloud_Recon_Aligned] = pcregistericp(ptCloud_Recon, ptCloud_GT);
+
+%% 5. 定量指标计算 (Quantitative Metrics) [cite: 365, 398]
+% 使用最近邻搜索计算欧式距离误差 (RMSE, MAE 计算基础) [cite: 374]
+[~, dists] = knnsearch(ptCloud_GT.Location, ptCloud_Recon_Aligned.Location);
+
+% 计算核心评价指标 [cite: 398]
+MAE   = mean(dists);            % 平均绝对误差
+RMSE  = sqrt(mean(dists.^2));   % 均方根误差
+MedAE = median(dists);          % 中值绝对误差
+
+%% 6. 结果可视化报告
+fprintf('\n--- 3D 重建评价报告 ---\n');
+fprintf('MAE:   %.4f m (%.2f mm)\n', MAE, MAE * 1000);
+fprintf('RMSE:  %.4f m\n', RMSE);
+fprintf('MedAE: %.4f m\n', MedAE);
+
+figure('Color', 'w');
+% 显示真值模型
+pcshow(ptCloud_GT, 'VerticalAxis', 'Z', 'VerticalAxisDir', 'Down'); 
+hold on;
+% 显示对齐后的重构结果
+pcshow(ptCloud_Recon_Aligned, 'MarkerSize', 10);
+title(['3D 重建 vs 真值模型 (MAE: ', num2str(MAE*1000, '%.2f'), ' mm)']);
+legend('真值模型 (Unity GT)', '对齐后的重构结果');
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+view(3); grid on;
+
+
