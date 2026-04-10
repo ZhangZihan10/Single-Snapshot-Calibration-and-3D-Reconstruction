@@ -8,10 +8,9 @@ This project focuses on achieving high-precision visual calibration and 3D recon
 
 Below is a demonstration of the system in action:
 
-https://github.com/ZhangZihan10/Single-Snapshot-Calibration-and-3D-Reconstruction/raw/main/Test.mp4
+![Project Demo](Test.gif)
 
-> **Note**: If the video fails to load, ensure that `Test.mp4` is uploaded to the root directory of your repository. You can also drag and drop the video file directly into the GitHub editor to generate a compatible link automatically.
-
+> **Note**: If the animation does not load, ensure that `Test.gif` is uploaded to the root directory of your repository.
 ---
 
 ## 🛠 Features
